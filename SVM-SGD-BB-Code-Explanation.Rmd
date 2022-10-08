@@ -1,0 +1,703 @@
+---
+title: '[Write-up]_SVM_SGD_BB'
+output:
+  html_document: default
+  pdf_document: default
+---
+
+
+<h1> 2. Gradient descent implementation </h1>
+
+<h2> Overview </h2>
+
+In this part we will be creating our own support vector machine stochastic
+gradient descent with Barzilai-Borwein step size (SVM SGD-BB). As there is
+little chance our data is separable, we will be using a soft-margin classifier.
+Furthermore, hard-margin classifier (also called maximal margin classifier) is
+much more sensitive to observations close to the choice boundary, meaning it can
+more easily overfit our data[1].
+
+We will first explain the optimization problem, then go through the method of
+finding an optimum, and walk you through the code step by step. Before we run the
+our code on the heart dataset we will test our implementation on a few simulated
+datasets. Then we will finally run our code on the data set and see how well it
+compares to other models.
+
+<h2> 2.1 Support Vector Optimization Problem </h2>
+
+In this implementation we will focus on linear svm, therefore we can represent
+our function as:
+$$
+\hat{f}(X) = \hat{\beta_0} + \hat{\beta_1x}_1 + \hat{\beta_2}x_2 +... +\hat{\beta_n}x_p
+$$
+Where we classify an object as:
+$$
+\hat{y} = -1 \space for \space \hat{f}(X)<0 \\ \hat{y} = 1 \space \space for \space \space \hat{f}(X)>=0
+$$
+
+To greatly simply our calculations when running an algorithm we will present
+our calculations in a matrix notation:
+$$
+\hat{f}(X)=X\hat{\beta}
+$$
+Many sources represent bias (also called constant term) as a separate variable b
+but throughout our calculations we will include the term as a first entry in
+the vector of coefficients B, and instead add a column of 1's to any data we
+pass to the algorithm. This should allow our algorithm to be more scalable when
+we use our algorithm for higher dimensional problems later on.
+
+Support vector classifier is a solution to a minimization problem[1]:
+$$
+max: M \\ subject\space to: \space  \|\beta \|_2\space = 1 \\
+\space y_i({x_i}^T\beta) \ge M(1- \epsilon_i), for\space all\space i \\
+\sum_{i=1}^n \epsilon_i\le K, \epsilon_i \ge 0, for\space all\space i
+$$
+M represents one-sided distance of the decision boundry to the margin[2].
+As this distance can be represented as second norm B^-1, instead of maximizing 
+the margin M (like in the previous formulation) we can rop our condition on 2nd 
+beta norm squared equal to one, and replacing M with it.
+$$
+M = 1/\|\beta \|
+$$
+
+Epsilon represents the relative distance to our decision boundary, where
+1>=e_i>=0 implies observation i has been correctly classified but lies inside
+the margin M, whereas e_i>= implies our observation has been miss classified.
+By putting an upper bound on the sum of e_i's let's say K, we limit the amount
+of possible missclasifications.
+
+$$
+\sum_{i=1}^n \epsilon_i<=K
+$$
+For K = 0 we do not allow any missclasifications, which is equivalent to a 
+the maximum margin classifier. Instead of putting an upper bound of K we again
+reformulate it as a sum of epsilons scaled by a factor C. Our, factor C will be
+inversely proportional to K, meaning for a separable case C -> inf.
+
+We can now re-arrange our optimization problem as [2]:
+
+$$
+min\space \frac{1}{2}\|\beta \|_2^2\space+\space C\sum_{i=1}^n \epsilon_i \\ 
+subject\space to: \epsilon_i \ge 0, \space y_i({x_i}^T\beta) \ge1- \epsilon_i, for\space all\space i
+$$
+This is a more computationally convenient representation which we will rely on,
+but it needs a few more modifications before we can apply it:
+
+$$
+ \epsilon_i \ge1-  \space y_i({x_i}^T\beta) \\ 
+ \space \epsilon_i \ge 0 \space\space, for\space all\space i
+$$
+We can now put those 2 conditions to get:
+$$
+\epsilon_i \ge max(0,1-y_i({x_i}^T\beta))
+$$
+This will represent our hinge SVM hinge loss [2][3] which we can put into our
+final minimization problem.
+
+We can finally write up the function we will be minimizing, let's denote it as
+h(B):
+$$
+h(\beta) = \frac{1}{2}\|\beta \|_2^2\space+\space C\sum_{i=1}^nmax(0,1-y_i({x_i}^T\beta))
+$$
+This is the typical form in which our optimization problem is presented
+[3][4]. The left side represents the regularization parameter, that maximizes
+the margin M. The right side is the aforementioned loss function, in our case 
+the hinge loss, that sums up the severity of classifications.
+
+One interesting thing to note is that some resources[1], re-write this
+equation in the following form:
+$$
+h(\beta) = \frac{1}{2}\ \lambda|\beta \|_2^2\space+\space \sum_{i=1}^nmax(0,1-y_i({x_i}^T\beta))
+$$
+This formulation resembles the ridge regression with parameter lambda
+penalizing the coefficients. This formulation is essentially the same function
+where lambda is inversely proportional to C parameter.
+
+In this case we will be using the first version of the formulation.
+
+<h2> 2.2 Gradient Descent method and derivations </h2>
+
+The aforementioned optimization has solution using Lagrange multipliers with
+KKT (Karush–Kuhn–Tucker) conditions [2][6]. This can be solved using quadratic
+programming, but such algorithms are very time consuming[5].
+
+Instead we will be applying a gradient descent algorithm. This algorithm uses
+a simple trick that the gradient of our optimization problem will, at a given
+point x_i, point in the direction of steepest ascent. Conversely, taking a step
+in the opposite direction will lead us towards the minimum. In the simplest
+form, the gradient works in the following way[7]:
+
+1. Initialize a set of values values Beta (can be all 0 or a set of random values)
+2. Calculate the gradient of our minimization function h(Beta) with respect to Beta
+3. Update Beta, subtracting Gradient times learning rate
+4. Repeat, until some criterion is reached.
+
+Before we explain the learning rate and stochastic gradient descent let us first
+calculate the gradient we will be using. Sadly, the function is not differential
+due to the max() condition, but we can find gradients for both outcomes of the
+condition[4][5]. We will use variable G to signify a gradient:
+$$
+\begin{align*}
+&G(\beta,X,Y)=\nabla_{\beta}h(\beta,X,Y)=\beta-C*y_ix_i\space&for \space 1-y_i(x_i^{T}\beta)>0 \\
+&G(\beta,X,Y)=\nabla_{\beta}h(\beta,X,Y)=\beta&else
+\end{align*}
+$$
+
+Gradient descent requires calculating the gradient for all observations X.
+As this can be time consuming we should use stochastic gradient descent (SGD).
+SGD at each new iteration of GD algorithm takes a sample of size S and 
+calculates the gradient for that particular sample. SGD also has one more
+advantage over SG. We know that both at the local extremum and a saddle point, 
+the gradient of our function will be equal to 0. This means our algorithm can
+terminate after getting stuck at a local saddle point, without finding an actual
+minimum we're looking for.
+
+
+Therefore we shall transform our initial GD algorithm to take a sample S of size
+s at each iteration and calculate the gradient according to:
+$$
+G(\beta,X,Y)=\beta-C*\frac{1}{s}[\sum_{i=1}^Sy_ix_i]\space\space\space\space\space for \space 1-y_i(x_i^{T}\beta)>0,\space i\in S
+$$
+
+Finally, we need to consider the learning rate, which will dictates how large
+the steps we will take towards the direction of our minimum[8]. Although, it
+seems as it could be set to an absolute value, this would require optimizing
+the parameter. Too large steps could mean our algorithm will jump around the
+minimum not really ever reaching it. Too small steps and it might take large
+amount of iterations to converge to a minimum[9]. To solve this we shall be
+using a Barzilai–Borwein (BB) method[8]. Although, it might seem problematic 
+to use BB method for stochastic setting as our algorithm never calculates 
+the entire gradient, paper proposed by K.Sopyla and P.Drozda[10], finds
+SGD-BB performs equally well as other similar learning rates, and has a much
+lower sensitivity to the choice of our intitial parameters.
+
+The Barzilai–Borwein method for learning rate (variable nn in code) is:
+$$
+\eta_n = \frac{\left | (\beta_t - \beta_{t-1})^{T}(G_t - G_{t-1}) \right |}{\left \| G_t - G_{t-1} \right \|_2^2}
+$$
+Where t is our current iteration of SGD algorithm.
+
+<h2> 2.3 Code explained </h2>
+
+Firstly, let us explain which variables we will be using throughout the code.
+
+
+The function will take 3 basic variables and have 3 more set by default:
+x - matrix of independent variables
+y - matrix/vector of dependent variables [vector of logical or -1/1's]
+C - cost parameter C [numeric]
+S - sample size [set by default to 10]
+t - the amount of iterations ("steps our gradient descent will take") the main
+            SDG loop will be executed [set by default to 1000]
+bias - variable controlling whether to add a constant beta_0 (also called bias)
+            [logical, set by default to TRUE]
+
+Furthermore throughout the code we will be repeatedly using some other variables:
+X - matrix of independent variables after initialization
+XS - matrix of independent variables sampled from X according to S
+Y - matrix of dependent variables after initialization
+YS - matrix of dependent variables sampled from Y according to S
+B - matrix of coefficients
+Bp - matrix of previous coefficients (used for BB)
+G - gradient
+Gp - previous gradient
+nn - learning rate
+Sample - indices of variables to be sampled each iteration
+V - vector, 0 if given variable is not a support vector, corresponding y_i 
+              if it is a support vector (this is done to simplify calculations later on)
+M - margin size
+
+We will be using a couple of different variables along the way but their names
+will be explicitly specified or specified as "Dummy" (indicating a dummy single use variable)
+
+```{r, eval = FALSE, results='hide',warning=FALSE}
+svm_gradient_descent <- function (x,y,C,S = 10,t = 1000,bias = TRUE) {
+  #B <- coefficient matrix
+  #t <- number of iterations
+  #nn <- learning rate
+  #G <- gradient
+  #bias <- whether to include bias term (also called constant)
+  #V <- vector of saved values y or 0 for max(0,1-Yi(BXi))
+  #S <- Sample for SGD (updated each iteration)
+  #XS, YS <- Sample of XS,YS of size S
+  }
+```
+
+
+
+
+
+Firstly, let us check whether the user wants to consider a model with/without
+a bias term (beta_0 constant coefficient). As we've explained in section 2.1,
+for our model to be scalable to p dimentions and make our calculations easier,
+instead of calculating it separately we will ad a row of 1's to our dependent
+matrix x. Thus, our model will automatically create 1 more coefficient and procede
+as normal later on.
+```{r, eval = FALSE, results='hide',warning=FALSE}
+  if (bias == TRUE) {
+    Dummy1 <- matrix(1,nrow(x),1)
+    x <- cbind(Dummy1,x)
+  }
+```
+
+Let's initialize variables we will need throughout the main loop:
+```{r, eval = FALSE, results='hide',warning=FALSE}
+  #Changes TRUE / FALSE to -1 and 1 and turns y into a data type matrix
+  Y <- data.matrix(ifelse(y == TRUE,1,-1))
+  
+  #Makes sure x is of data type matrix
+  X <- data.matrix(x)
+  
+  #Initializes coefficient & gradient matrices
+  B <- matrix(0,ncol(x),1)
+  G <- matrix(0,ncol(x),1)
+```
+
+Now, let us proceed to the main loop of the SGD algorithm which will be executed
+t times. Firstly, we update the previous gradient (Gp) to be the current gradient (G).
+Next, we sample without replacement the indices of rows to be selected as a 
+batch of variables to update the gradient (Sample). Then we choose our sampled
+variables (XS,YS). Finally, we initialize our matrix (V) we will be using for storing,
+y_i's and 0's, depending on whether a variable is a support vector or not.
+
+In part (1) we check whether given variables are support vectors.
+In part (2) we update the gradient
+In part (3) we chose our step size
+In part (4) we prevent the code from running on NaN values
+
+We update matrix of previous coefficients (Bp) before updating 
+the current one (B)
+
+
+```{r, eval = FALSE, results='hide',warning=FALSE}
+ for (i in 1:t) {
+    
+    
+    #Sets previous gradient to be current gradient (used for BB)
+    Gp <- G
+    
+    #Sampling without replacement
+    Sample <- sample(nrow(X),S)
+    XS <- as.matrix(X[Sample,])
+    YS <- as.matrix(Y[Sample,])
+    V <- matrix(0,nrow(YS),1)
+    
+    #Part (1):
+    #max(0,1-yi(xiB)) part of the algorithm, saving output in V
+    #explained in the next part
+    #explained in the next part
+    #explained in the next part
+    
+    #Part (2):
+    #updating the gradient using V,B and C
+    #explained in the next part
+    #explained in the next part
+    #explained in the next part
+
+    #Part (3):
+    #Barzilai-Borwein Step Size for i> iterations (fixed for i==1)
+    #explained in the next part
+    #explained in the next part
+    #explained in the next part
+    
+    #Part (4):
+    #Checks whether the value of B is NaN and prevents further iterations if TRUE
+    #explained in the next part
+    #explained in the next part
+    #explained in the next part
+    
+    #Sets previous coefficients to the current coefficients, before updating
+    Bp <- B
+    
+    #Takes the step in the direction of minimum
+    B <- B-nn*G
+    
+  }
+```
+
+Part(1)
+
+This part will be checking whether a given variable is a support vector.
+Instead of saving the variables as 1's and 0's, in order to simplify
+calculations of Part(2), we will instead save y_i's and 0's. We save our support 
+vectors as y_i's, as in part(2) we will be multiplying matrices by the entire set
+XS, giving us output of either 0 (if not a support vector) or x_i*y_i if it is.
+This part is respective of:
+$$
+max(0,1-y_i({x_i}^T\beta)) \space\space\space\space\space for\space i\in S
+$$
+```{r, eval = FALSE, results='hide',warning=FALSE}
+    #Part(1)
+    #max(0,1-yi(xiB)) part of the algorithm, saving output in V
+    for (n in c(1:nrow(XS))) {
+      V[n] <- ifelse((1 - (XS[n,] %*% B)*YS[n])>0,YS[n],0)
+    }
+```
+
+Part (2)
+
+We simply update our gradient according to the derivations from 2.1.
+This part is respective of:
+$$
+G(\beta,X,Y)=\beta-C*\frac{1}{s}[\sum_{i=1}^Sy_ix_i]\space\space\space\space\space for \space 1-y_i(x_i^{T}\beta), i\in S
+$$
+```{r, eval = FALSE, results='hide',warning=FALSE}
+    #Part(2)
+    #updating the gradient using V,B and C
+    for (j in c(1:ncol(XS))) {
+      G[j] <- B[j]- (C*((t(V)%*%XS[,j])/nrow(XS)))
+    }
+```
+
+Part (3)
+
+In this part we set our learning rate. In order to apply BB, we of course need
+previous set of coefficients as well as gradients, hence for 1st iteration
+of algorithm we will set a fixed value of nn=0.001
+
+This part is respective of:
+$$
+\eta_n = \frac{\left | (\beta_t - \beta_{t-1})^{T}(G_t - G_{t-1}) \right |}{\left \| G_t - G_{t-1} \right \|_2^2}
+$$
+```{r, eval = FALSE, results='hide',warning=FALSE}
+    #Part(3)
+    #Barzilai-Borwein Step Size for i> iterations (fixed for i==1)
+    if (i== 1) {
+      nn = 1/1000
+    } else {
+      numerator = abs(t(B-Bp)%*%(G-Gp))
+      denominator = (t(G-Gp)%*%(G-Gp))
+      nn = as.vector(numerator/denominator)
+    }
+```
+
+Part (4) and output
+
+There might be a situation were our algorithm runs into a saddle point or
+happens to reach minimum faster then we initially expected (or for some other
+unexpected reason Gp == G). The former can especially happen for very low 
+values of S. In either case if G == Gp our BB algorithm will return a value NaN,
+as it will be trying to solve 0/0 and conversely update our B vector for the rest
+of the iterations. To prevent this we will terminate the loop faster, display
+a warning to the user that we have not reached all of our desired iterations, and
+give an output we would otherwise do, but for the previous loop.
+```{r, eval = FALSE, results='hide',warning=FALSE}
+    #Part(4)
+    #Checks whether the value of B is NaN and prevents further iterations if TRUE
+    if (is.na(nn)) {
+      warning(c("Terminated after ",i," iterations"))
+      predicted <- ifelse(X%*%Bp<0,-1,1)
+      error_rate <- sum(ifelse(predicted ==Y,0,1))/nrow(Y)
+      M <- 1/(sqrt(t(Bp)%*%Bp))
+      
+      svm_output <- list(coef = Bp, error_rate = error_rate,margin = M)
+      class(svm_output) <- "svm_sgd_bb"
+      return(svm_output)
+    }
+```
+
+
+The output will be stored as a class for the user to easily read-off different
+variables of interest, as well as access them efficiently through $.
+
+To do this we'll calculate error-rate in the standard way (counting how many
+of our predictions do not overlap with), and the margin M according to:
+$$
+M = 1/\|\beta \|
+$$
+```{r, eval = FALSE, results='hide',warning=FALSE}
+  predicted <- ifelse(X%*%B<0,-1,1)
+  error_rate <- sum(ifelse(predicted ==Y,0,1))/nrow(Y)
+  M <- 1/(sqrt(t(B)%*%B))
+  
+  svm_output <- list(coef = B, error_rate = error_rate,margin = M)
+  class(svm_output) <- "svm_sgd_bb"
+  return(svm_output)
+```
+
+We can now initialize our entire function with all of its components.
+
+This our final function we have created:
+```{r}
+svm_gradient_descent <- function (x,y,C,S = 10,t = 1000,bias = TRUE) {
+  #B <- coeffiient matrix
+  #t <- number of interations
+  #nn <- learning rate
+  #H <- vector of h hinge loss value for each iteration
+  #G <- gradient
+  #b <- whether to include bias term (also called constant)
+  #V <- vector of saved values y or 0 for max(0,1-Yi(BXi)
+  #S <- Sample size for SGD
+  #XS, YS <- Sample of XS,YS of size S
+  
+  #Adds a row of 1's if constant is true
+  if (bias == TRUE) {
+    Dummy1 <- matrix(1,nrow(x),1)
+    x <- cbind(Dummy1,x)
+  }
+  
+  #Changes TRUE / FALSE to -1 and 1 and turns y into a data type matrix
+  Y <- data.matrix(ifelse(y == TRUE,1,-1))
+  
+  #Makes sure x is of data type matrix
+  X <- data.matrix(x)
+  
+  #Initializes coefficient & gradient matrices
+  B <- matrix(0,ncol(x),1)
+  G <- matrix(0,ncol(x),1)
+  
+  for (i in 1:t) {
+    #Sets previous gradient to be current gradient
+    Gp <- G
+    
+    #Sampling without replacement
+    Sample <- sample(nrow(X),S)
+    XS <- as.matrix(X[Sample,])
+    YS <- as.matrix(Y[Sample,])
+    V <- matrix(0,nrow(YS),1)
+    
+    #Part(1)
+    #max(0,1-yi(xiB)) part of the algorithm, saving output in V
+    for (n in c(1:nrow(XS))) {
+      #Main part of the max(0,1-yi(Bxi) equation
+      V[n] <- ifelse((1 - (XS[n,] %*% B)*YS[n])>0,YS[n],0)
+    }
+    
+    #Part(2)
+    #updating the gradient using V,B and C
+    for (j in c(1:ncol(XS))) {
+      G[j] <- B[j]- (C*((t(V)%*%XS[,j])/nrow(XS)))
+    }
+    
+    #Part(3)
+    #Barzilai-Borwein Step Size for i> iterations (fixed for i==1)
+    if (i== 1) {
+      nn = 1/1000
+    } else {
+      numerator = abs(t(B-Bp)%*%(G-Gp))
+      denominator = (t(G-Gp)%*%(G-Gp))
+      nn = as.vector(numerator/denominator)
+    }
+    
+    #Part(4)
+    #Checks whether the value of B is NaN and prevents further iterations if TRUE
+    if (is.na(nn)) {
+      warning(c("Terminated after ",i," iterations"))
+      predicted <- ifelse(X%*%Bp<0,-1,1)
+      error_rate <- sum(ifelse(predicted ==Y,0,1))/nrow(Y)
+      M <- 1/(sqrt(t(Bp)%*%Bp))
+      
+      svm_output <- list(coef = Bp, error_rate = error_rate,margin = M)
+      class(svm_output) <- "svm_sgd_bb"
+      return(svm_output)
+    }
+    #Sets previous coefficients to the current coefficients, before updating
+    Bp <- B
+    
+    #Takes the step in the direction of minimum
+    B <- B-nn*G
+  }
+  predicted <- ifelse(X%*%B<0,-1,1)
+  error_rate <- sum(ifelse(predicted ==Y,0,1))/nrow(Y)
+  M <- 1/(sqrt(t(B)%*%B))
+  
+  svm_output <- list(coef = B, error_rate = error_rate,margin = M,gradient=G)
+  class(svm_output) <- "svm_sgd_bb"
+  return(svm_output)
+}
+```
+
+<h2> 2.4 Testing our function </h2>
+
+Let us create two data sets,1st linearly separable (X1), the other not (X2) [11]:
+```{r}
+set.seed(80)
+n = 500
+a1 = rnorm(n)
+a2 = 1 + a1 + 2* runif(n)
+b1 = rnorm(n)
+b2 = -1 + b1 - 2*runif(n)
+X1 = rbind(matrix(cbind(a1,a2),,2),matrix(cbind(b1,b2),,2))
+
+a1 = rnorm(n)
+a2 =  - a1 + 2* runif(n)
+b1 = rnorm(n)
+b2 = -0.5 - b1 - 2*runif(n)
+X2 = rbind(matrix(cbind(a1,a2),,2),matrix(cbind(b1,b2),,2))
+Y <- matrix(c(rep(1,n),rep(-1,n)))
+
+remove(a1,a2,b1,b2,n)
+```
+
+Now let us check our models for 2 levels of C (high and low). We will also
+increase the amount of iterations to make sure our model reaches a minimum,
+and set the sample to be about 1/3 of our dataset.Before running our
+function we will unset the seed for our random sampling to work correctly:
+```{r}
+set.seed(NULL)
+Test1 <- svm_gradient_descent(X1,Y,C=100,t=2000,S=300)
+Test2 <- svm_gradient_descent(X1,Y,C=0.1,t=2000,S=300)
+Test3 <- svm_gradient_descent(X2,Y,C=100,t=2000,S=300)
+Test4 <- svm_gradient_descent(X2,Y,C=0.1,t=2000,S=300)
+set.seed(80)
+```
+
+Plotting the predictions:
+```{r}
+par(mfrow=c(2,2))
+plot(X1,col=ifelse(Y>0,4,2),pch=".",cex=7,xlab = "x1",ylab = "x2")
+abline(-Test1$coef[1]/Test1$coef[3],-Test1$coef[2]/Test1$coef[3])
+abline(Test1$margin-(Test1$coef[1]/Test1$coef[3]),-Test1$coef[2]/Test1$coef[3],lty=2)
+abline(-Test1$margin-(Test1$coef[1]/Test1$coef[3]),-Test1$coef[2]/Test1$coef[3],lty=2)
+
+plot(X1,col=ifelse(Y>0,4,2),pch=".",cex=7,xlab = "x1",ylab = "x2")
+abline(-Test2$coef[1]/Test2$coef[3],-Test2$coef[2]/Test2$coef[3])
+abline(Test2$margin-(Test2$coef[1]/Test2$coef[3]),-Test2$coef[2]/Test2$coef[3],lty=2)
+abline(-Test2$margin-(Test2$coef[1]/Test2$coef[3]),-Test2$coef[2]/Test2$coef[3],lty=2)
+
+plot(X2,col=ifelse(Y>0,4,2),pch=".",cex=7,xlab = "x1",ylab = "x2")
+abline(-Test3$coef[1]/Test3$coef[3],-Test3$coef[2]/Test3$coef[3])
+abline(Test3$margin-(Test3$coef[1]/Test3$coef[3]),-Test3$coef[2]/Test3$coef[3],lty=2)
+abline(-Test3$margin-(Test3$coef[1]/Test3$coef[3]),-Test3$coef[2]/Test3$coef[3],lty=2)
+
+plot(X2,col=ifelse(Y>0,4,2),pch=".",cex=7,xlab = "x1",ylab = "x2")
+abline(-Test4$coef[1]/Test4$coef[3],-Test4$coef[2]/Test4$coef[3])
+abline(Test4$margin-(Test4$coef[1]/Test4$coef[3]),-Test4$coef[2]/Test4$coef[3],lty=2)
+abline(-Test4$margin-(Test4$coef[1]/Test4$coef[3]),-Test4$coef[2]/Test4$coef[3],lty=2)
+```
+
+On the left side we can see the models run with C=100. This is proportional to
+setting our upper boundary on miss classifications as very high. As expected our
+model classifies the data almost perfectly with a very low margin.
+
+On the right side we see both models with C=0.1. As explained in 2.1, C is
+inversely proportional to lambda (a different formulation of our model), 
+hence low C would be equivalent to penalizing our coefficients very hard, just
+like in ridge regression. As we can see, we have squashed our decision boundry
+towards 0 all while significantly increasing the margin (in the right bottom graph
+margin is outside the picture).
+
+As we can see from this short test, our SVM-SGD-BB works as intended. We can
+finally deploy it on our data.
+
+<h2> 2.5 Deploying our model on Heart dataset </h2>
+
+Let us deploy our model on our train dataset, but before we do that we need to
+preprocess our data so that our binary values are expressed as -1,1. As we will
+be adding a bias term we will add a row of 1's at the begging of our test data 
+set:
+
+```{r}
+DummySexTrain <- data.matrix(ifelse(train$Sex == "M",1,-1))
+DummySexTest <- data.matrix(ifelse(test$Sex == "M",1,-1))
+
+DummyFastingTrain <- data.matrix(ifelse(train$FastingBS == 0,-1,1))
+DummyFastingTest <- data.matrix(ifelse(test$FastingBS == 0,-1,1))
+
+DummyAnginaTrain  <- data.matrix(ifelse(train$ExerciseAngina == "Y",1,-1))
+DummyAnginaTest <- data.matrix(ifelse(test$ExerciseAngina == "Y",1,-1))
+
+
+
+Xtrain <-cbind(train$Age,train$RestingBP,train$Cholesterol,train$MaxHR,
+               train$Oldpeak)
+
+Dummy1 <- matrix(1,nrow(test),1)
+Xtest <-cbind(Dummy1,test$Age,test$RestingBP,test$Cholesterol,test$MaxHR,
+               test$Oldpeak)
+Ytrain <- train$HeartDisease
+Ytest <- data.matrix(ifelse(test$HeartDisease == TRUE,1,-1))
+```
+
+Now let us deploy our model with multiple values of C to see which one performs 
+best.  We shall set S to be 100, which is around 1/3 of our train data set, and 
+as our previous tests have shown, this should be enough to gain significant results.
+
+```{r}
+set.seed(80)
+SVM_Result1 <- svm_gradient_descent(Xtrain,Ytrain,C=0.1,t=3000,S=100)
+SVM_Result2 <- svm_gradient_descent(Xtrain,Ytrain,C=1,t=3000,S=100)
+SVM_Result3 <- svm_gradient_descent(Xtrain,Ytrain,C=10,t=3000,S=100)
+SVM_Result4 <- svm_gradient_descent(Xtrain,Ytrain,C=100,t=3000,S=100)
+
+head(SVM_Result1$error_rate)
+head(SVM_Result2$error_rate)
+head(SVM_Result3$error_rate)
+head(SVM_Result4$error_rate)
+```
+
+We can see that our model with the highest C, has the lowest error rate. This is
+rather surprising given we wouldn't expect our data to be linearly separable.
+Thus we can expect there to be a significant level of model overfit. 
+
+
+
+Now let us check how our models perform on test data:
+```{r}
+  SVM_predicted1 <- ifelse(Xtest%*%SVM_Result1$coef<0,-1,1)
+  SVM_test_error_rate1 <- sum(ifelse(SVM_predicted1 ==Ytest,0,1))/nrow(Ytest)
+  
+  SVM_predicted2 <- ifelse(Xtest%*%SVM_Result2$coef<0,-1,1)
+  SVM_test_error_rate2 <- sum(ifelse(SVM_predicted2 ==Ytest,0,1))/nrow(Ytest)
+  
+  SVM_predicted3 <- ifelse(Xtest%*%SVM_Result3$coef<0,-1,1)
+  SVM_test_error_rate3 <- sum(ifelse(SVM_predicted3 ==Ytest,0,1))/nrow(Ytest)
+  
+  SVM_predicted4 <- ifelse(Xtest%*%SVM_Result4$coef<0,-1,1)
+  SVM_test_error_rate4 <- sum(ifelse(SVM_predicted4 ==Ytest,0,1))/nrow(Ytest)
+  
+  
+
+  
+  head(SVM_test_error_rate1)
+  head(SVM_test_error_rate2)
+  head(SVM_test_error_rate3)
+  head(SVM_test_error_rate4)
+```
+
+As we've expected, the model with highest C actually performs worse then a model
+with C=10. We can also observe that our test error rate is lower then test, which
+would imply
+
+
+
+
+
+<b>Please note</b>:
+We have not commented on this part of our svm algorithm as it gives different
+coefficients each time we re-run it, and we don't know what the final outcome 
+will be. This result even occurs with very high amount of iterations t>100k. 
+This could most likely be caused by weird shape of the loss function at a
+minimum, combined with random sampling of observations. At a minimum our gradient
+should be 0, although gradient descent algorithms rarely give an exact minimum
+(rather an approximation) we should still expect the gradient to be small. 
+For this purpose we have examined gradient of our algorithm (although we 
+didn't include it here). Depending on the run, we observed that it had a 
+tendency to jump from extremely small values (~10^-5) to very high (~350). This
+might mean that the descent near the optimum is very steep and depending on 
+the sample, the step size will increase significantly whenever we come close to
+a minimum, effectively overshooting the minimum.
+
+
+
+
+
+
+
+
+
+[1] Introduction to Statistical Learning https://statlearning.com/
+[2] Elements of Statistical Learning https://web.stanford.edu/~hastie/ElemStatLearn/
+[3] https://towardsdatascience.com/a-definitive-explanation-to-hinge-loss-for-support-vector-machines-ab6d8d3178f1
+[4]https://towardsdatascience.com/solving-svm-stochastic-gradient-descent-and-hinge-loss-8e8b4dd91f5b
+[5]https://www.cs.utah.edu/~zhe/pdf/lec-19-2-svm-sgd-upload.pdf
+[6]MA208 Optimization Theory Lecture Notes written by Bernhard von Stengel,
+edited by Julia Bottcher
+[7]https://en.wikipedia.org/wiki/Gradient_descent
+[8]https://en.wikipedia.org/wiki/Learning_rate
+[9]https://en.wikipedia.org/wiki/Stochastic_gradient_descent
+[10]https://www.sciencedirect.com/science/article/abs/pii/S0020025515002467
+[11]Randomizing sets to check svm part: https://rpubs.com/empireisme/linearsvm
+
+
+
